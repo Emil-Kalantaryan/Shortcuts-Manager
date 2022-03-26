@@ -1,0 +1,2 @@
+# Shortcuts-Manager
+Shortcuts Manager
