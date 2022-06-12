@@ -1,16 +1,14 @@
 # Constant Variables - Program Information
 New-Variable -Name Author -Option Constant -Value "Emil Kalantaryan"
 New-Variable -Name Name -Option Constant -Value "Shortcuts Manager"
-New-Variable -Name Version -Option Constant -Value "1.1.0"
-New-Variable -Name Date -Option Constant -Value "26/04/2022"
-New-Variable -Name GitHubRepositoryURL -Option Constant -Value "https://github.com/Emil-Kalantaryan/Shortcuts-Manager"
-New-Variable -Name GitHubReleasesURL -Option Constant -Value "$("$GitHubRepositoryURL"+"/releases")"
+New-Variable -Name Version -Option Constant -Value "1.2.0"
+New-Variable -Name Date -Option Constant -Value "12/06/2022"
 
 # Constant Variable - Origin of the Execution (first Parameter of the Program)
 New-Variable -Name Origin -Option Constant -Value $Args[0]
 
 # Constant Variable - Reserved Slots for 'System Options'
-New-Variable -Name ReservedSlots -Option Constant -Value 4
+New-Variable -Name ReservedSlots -Option Constant -Value 1
 
 # Constant Variable - Remote Desktop Address Regular Expression Pattern
 New-Variable -Name RDPRegExPattern -Option Constant -Value "^rdp:.+$"
@@ -74,11 +72,15 @@ New-Variable -Name ForbiddenProfileNames -Option Constant -Value @(
     "LPT9"
 )
 
+# Constant Variables - GitHub Links
+New-Variable -Name GitHubRepositoryURL -Option Constant -Value "https://github.com/Emil-Kalantaryan/Shortcuts-Manager"
+New-Variable -Name GitHubReleasesURL -Option Constant -Value "$("$GitHubRepositoryURL"+"/releases")"
+
 # Constant Variables - Limits
 New-Variable -Name ShortcutNameCharLimit -Option Constant -Value 128
 New-Variable -Name CategoryNameCharLimit -Option Constant -Value 64
 New-Variable -Name ProfileNameCharLimit -Option Constant -Value 32
-New-Variable -Name ShortcutsLimit -Option Constant -Value $(999 - $ReservedSlots)
+New-Variable -Name ShortcutsLimit -Option Constant -Value $(1000 - $ReservedSlots)
 New-Variable -Name CategoriesLimit -Option Constant -Value 14
 New-Variable -Name ProfilesLimit -Option Constant -Value 100
 New-Variable -Name BackupsLimit -Option Constant -Value 100
@@ -103,6 +105,18 @@ New-Variable -Name NoMoreProfilesThanTheCurrentOne -Option Constant -Value "ERRO
 New-Variable -Name PressEnterToRemainCurrentValue -Option Constant -Value "`nINFO: Press 'Enter' without typing anything in the fields that you want to remain with the current value"
 New-Variable -Name NotMatchYN -Option Constant -Value "`nERROR: The indicated value does not match with the format: [Y/N]"
 New-Variable -Name SelectMenuItem -Option Constant -Value "Select a Menu item: "
+
+# Script Block - Commit Changes to the Current Profile Database
+$CommitChangesToCurrentProfileDatabase = {
+    $Database | ConvertTo-Json | Out-File $CurrentProfileDatabasePath
+    $Database = Get-Content -Path $CurrentProfileDatabasePath | ConvertFrom-Json
+}
+
+# Script Block - Commit Changes to the Profiles Database
+$CommitChangesToProfilesDatabase = {
+    $ProfilesDatabase | ConvertTo-Json | Out-File $ProfilesDatabasePath
+    $ProfilesDatabase = Get-Content -Path $ProfilesDatabasePath | ConvertFrom-Json
+}
 
 # Function - Converts a String passed as parameter to UTF-8 format
 function StringToUTF8 {
@@ -255,7 +269,7 @@ function ItemNotInList {
     Write-Host "`nERROR: The selected $ItemName is not available in the $ListName List" -ForegroundColor $ErrorColor
 }
 
-# Function - Displays an error indicating that no items has been created (type of the item passed as parameter)
+# Function - Displays a text indicating that no items has been created (type of the item passed as parameter)
 function NoItemsCreated {
     param (
         $Params
@@ -286,6 +300,24 @@ function NoItemsCreated {
     }
 }
 
+# Function - Displays a Text / Error (Type specified by parameter) indicating that no filters has been applied
+function NoFiltersApplied {
+    param (
+        $DisplayAsError
+    )
+
+    if ($DisplayAsError) {
+        $TextColor = $ErrorColor
+        Write-Host "`nERROR: " -ForegroundColor $TextColor -NoNewLine
+    }
+    else {
+        $TextColor = $EmptyColor
+        Write-Host "  " -NoNewLine
+    }
+
+    Write-Host "There are no Filters applied" -ForegroundColor $TextColor
+}
+
 # Function - Displays an informative message indicating that no values have been changed (Modification Forms)
 function NoChangesDetected {
     param (
@@ -311,6 +343,7 @@ function NoSlotsAvailable {
         $ItemName
     )
     Write-Host "`nERROR: No slots available to create a new $ItemName (Delete an existing $ItemName to obtain a free slot)`n" -ForegroundColor $ErrorColor
+    PressAnyKeyToContinue
 }
 
 # Function - Removes a Color (passed as parameter) from the Colors list
@@ -352,6 +385,44 @@ function AddColorToColorsList {
     }
 }
 
+# Function - Removes a Filter (passing the Filter index as parameter) from the Applied Filters list
+function RemoveFilterFromAppliedFiltersList {
+    param (
+        $FilterIndex
+    )
+    # Getting the Category ID
+    $CategoryID = $Database.Filters[$FilterIndex]
+
+    # Checking if there is only one Filter applied / Removing the selected Filter
+    if ($Database.Filters.Length -eq 1) {
+        $Database.Filters = @()
+    }
+    elseif ($Database.Filters.Length -eq 2) {
+        $FiltersList = @()
+        $FiltersList += $Database.Filters | Where-Object { $_ -ne $CategoryID }
+        $Database.Filters = $FiltersList
+    }
+    else {
+        $Database.Filters = $Database.Filters | Where-Object { $_ -ne $CategoryID }
+    }
+}
+
+# Function - Adds a Filter (passing the Filter index as parameter) to the Applied Filters list
+function AddFilterToAppliedFiltersList {
+    param (
+        $CategoryID
+    )
+    if (!(CheckForAppliedFilters)) {
+        $FiltersList = @()
+        $FiltersList += $CategoryID
+        $Database.Filters = $FiltersList
+    }
+    else {
+        $Database.Filters += $CategoryID
+        $Database.Filters = $Database.Filters | Sort-Object
+    }
+}
+
 # Function - Given a Shortcuts list, sorts it by category and returns the Sorted list
 function SortShortcuts {
     param (
@@ -361,11 +432,12 @@ function SortShortcuts {
     foreach ($Category in $Database.Categories) {
         foreach ($Shortcut in $ShortcutsList) {
             if ($Shortcut.CategoryID -eq $Category.ID) {
-                $SortedShortcut = @{}
-                $SortedShortcut.Add("ID", $Shortcut.ID)
-                $SortedShortcut.Add("Name", $Shortcut.Name)
-                $SortedShortcut.Add("Path", $Shortcut.Path)
-                $SortedShortcut.Add("CategoryID", $Shortcut.CategoryID)
+                $SortedShortcut = [ORDERED] @{
+                    "ID"         = $Shortcut.ID
+                    "Name"       = $Shortcut.Name
+                    "Path"       = $Shortcut.Path
+                    "CategoryID" = $Shortcut.CategoryID
+                }
                 $SortedShortcutsList += $SortedShortcut
             }
         }
@@ -407,6 +479,30 @@ function GetProfileIndex {
     return $ProfileIndex
 }
 
+# Function - Given a category ID, returns its Index in the Applied Filters list
+function GetFilterIndex {
+    param (
+        $CategoryID
+    )
+    $Found = $False
+    $FilterIndex = 0
+    foreach ($Filter in $Database.Filters) {
+        if ($CategoryID -eq $Filter) {
+            $Found = $True
+            break
+        }
+        else {
+            $FilterIndex++
+        }
+    }
+    if ($Found) {
+        return $FilterIndex
+    }
+    else {
+        return $False
+    }
+}
+
 # Function - Returns the number of available backups of the current profile
 function GetNumberOfBackups {
     $BackupsList = Get-ChildItem -Name -Path $CurrentProfileBackupsPath | Where-Object { $_ -match $BackupFileNameRegExPattern }
@@ -421,6 +517,102 @@ function GetNumberOfBackups {
     }
     catch {
         return 0
+    }
+}
+
+# Function - Checks if a Profile Name is valid or not (Looking for forbidden chars and names, chars limit and duplicated names)
+function CheckProfileName {
+    param (
+        $ProfileName
+    )
+    # Cheking if the Profile Name has Forbidden Characters
+    if ($ProfileName -match $ProfileNameRegExPattern) {
+        # Cheking if the Profile Name has exceeded the Characters limit
+        if (CharLimitNotExceeded($ProfileName, $ProfileNameCharLimit, "Profile Name")) {
+            # Checking if the Profile Name is equal to a Reserved Name of the Operating System
+            if ($ProfileName -in $ForbiddenProfileNames) {
+                Write-Host "`nERROR: The provided Profile Name is reserved by the Operating System (Windows)" -ForegroundColor $ErrorColor
+                return $False
+            }
+            else {
+                # Cheking if the Profiles Directory exists
+                if (Test-Path -Path $ProfilesPath) {
+                    # Getting existent Profile Names
+                    $LocalProfilesNames = Get-ChildItem -Path $ProfilesPath -Name
+                }
+                else {
+                    $LocalProfilesNames = ""
+                }
+
+                # Checking if the Profile Name is equal to an existing Profile Name
+                if ($ProfileName -in $LocalProfilesNames) {
+                    Write-Host "`nERROR: The provided Profile Name is equal than an already existent Profile Name" -ForegroundColor $ErrorColor
+                    return $False
+                }
+                else {
+                    return $True
+                }
+            }
+        }
+        else {
+            return $False
+        }
+    }
+    else {
+        Write-Host "`nERROR: The provided Profile Name has forbidden characters. Allowed characters: [A-Z] [a-z] [0-9]" -ForegroundColor $ErrorColor
+        return $False
+    }
+}
+
+# Function - Checks if there are Categories created (Can hide the error output by passing a "False" boolean value as parameter)
+function CheckForCategories {
+    param (
+        $PrintError
+    )
+    if ($Database.Categories.Length -eq 0) {
+        if ($PrintError) {
+            NoItemsCreated("Categories", $ErrorColor, $True, $True, $True)
+            PressAnyKeyToContinue
+        }
+        return $False
+    }
+    else {
+        return $True
+    }
+}
+
+# Function - Checks if there are Shortcuts created (Can hide the error output by passing a "False" boolean value as parameter)
+function CheckForShortcuts {
+    param (
+        $PrintError
+    )
+    if ($Database.Shortcuts.Length -eq 0) {
+        if ($PrintError) {
+            NoItemsCreated("Shortcuts", $ErrorColor, $True, $True, $True)
+            PressAnyKeyToContinue
+        }
+        return $False
+    }
+    else {
+        return $True
+    }
+}
+
+# Function - Checks if there are Filters applied (Can hide the error output by passing a "False" boolean value as parameter)
+function CheckForAppliedFilters {
+    param (
+        $PrintError
+    )
+    if ($Database.Filters.Length -eq 0) {
+        if ($PrintError) {
+            NoFiltersApplied($True)
+            Write-Host ""
+            PressAnyKeyToContinue
+        }
+        return $False
+    }
+    else {
+        return $True
     }
 }
 
@@ -520,82 +712,6 @@ function CharLimitNotExceeded {
     }
 }
 
-# Function - Checks if a Profile Name is valid or not (Looking for forbidden chars and names, chars limit and duplicated names)
-function CheckProfileName {
-    param (
-        $ProfileName
-    )
-    # Cheking if the Profile Name has Forbidden Characters
-    if ($ProfileName -match $ProfileNameRegExPattern) {
-        # Cheking if the Profile Name has exceeded the Characters limit
-        if (CharLimitNotExceeded($ProfileName, $ProfileNameCharLimit, "Profile Name")) {
-            # Checking if the Profile Name is equal to a Reserved Name of the Operating System
-            if ($ProfileName -in $ForbiddenProfileNames) {
-                Write-Host "`nERROR: The provided Profile Name is reserved by the Operating System (Windows)" -ForegroundColor $ErrorColor
-                return $False
-            }
-            else {
-                # Cheking if the Profiles Directory exists
-                if (Test-Path -Path $ProfilesPath) {
-                    # Getting existent Profile Names
-                    $LocalProfilesNames = Get-ChildItem -Path $ProfilesPath -Name
-                }
-                else {
-                    $LocalProfilesNames = ""
-                }
-
-                # Checking if the Profile Name is equal to an existing Profile Name
-                if ($ProfileName -in $LocalProfilesNames) {
-                    Write-Host "`nERROR: The provided Profile Name is equal than an already existent Profile Name" -ForegroundColor $ErrorColor
-                    return $False
-                }
-                else {
-                    return $True
-                }
-            }
-        }
-        else {
-            return $False
-        }
-    }
-    else {
-        Write-Host "`nERROR: The provided Profile Name has forbidden characters. Allowed characters: [A-Z] [a-z] [0-9]" -ForegroundColor $ErrorColor
-        return $False
-    }
-}
-
-# Function - Checks if there are Categories created (Can hide the error output by passing a "False" boolean value as parameter)
-function CheckForCategories {
-    param (
-        $PrintError
-    )
-    if ($Database.Categories.Length -eq 0) {
-        if ($PrintError) {
-            NoItemsCreated("Categories", $ErrorColor, $True, $True, $True)
-        }
-        return $False
-    }
-    else {
-        return $True
-    }
-}
-
-# Function - Checks if there are Shortcuts created (Can hide the error output by passing a "False" boolean value as parameter)
-function CheckForShortcuts {
-    param (
-        $PrintError
-    )
-    if ($Database.Shortcuts.Length -eq 0) {
-        if ($PrintError) {
-            NoItemsCreated("Shortcuts", $ErrorColor, $True, $True, $True)
-        }
-        return $False
-    }
-    else {
-        return $True
-    }
-}
-
 # Function - Counts how many Shortcuts are in a specific Category (Passing the ID of the desired Category as a parameter)
 function CountShortcutsInCategory {
     param (
@@ -668,6 +784,25 @@ function ShowCurrentProfileName {
     Write-Host "Current Profile: $CurrentProfileName" -ForegroundColor $ProcessColor
 }
 
+# Function - Shows in the Standard Output the Detected Type (passed as parameter) of a Shortcut
+function ShowDetectedType {
+    param (
+        $Params
+    )
+
+    # Parameters
+    $PrintChekingText = $Params[0]
+    $Type = "$($Params[1])"
+
+    if ($PrintChekingText) {
+        Write-Host "Cheking the selected Shortcut Type..." -ForegroundColor $ProcessColor
+    }
+
+    # Output
+    Write-Host "Detected type: " -ForegroundColor $DefaultColor -NoNewLine
+    Write-Host $Type -ForegroundColor $DataColor
+}
+
 # Function - Shows the Stats of a Item Type specified as parameter (Stats: Number of Items, Items Limit & Available Slots of that Item)
 function ShowItemStats {
     param (
@@ -694,6 +829,11 @@ function ShowItemStats {
         $NumberOfItems = $ProfilesDatabase.Profiles.Length
         $ItemLimit = $ProfilesLimit
         $ItemName = "Profiles"
+    }
+    elseif ("$ItemType" -eq "FILTER") {
+        $NumberOfItems = $Database.Filters.Length
+        $ItemLimit = $Database.Categories.Length
+        $ItemName = "Filters"
     }
 
     Write-Host "  $($NumberOfItems) / $ItemLimit $ItemName" -ForegroundColor $DefaultColor -NoNewLine
@@ -831,7 +971,7 @@ function ActionCancelled {
 
     # Cheking Action Type
     if ($Action -eq "DELETE") {
-        if ($ProfileName -eq "") {
+        if (IsEmpty($ProfileName)) {
             $Text = "The selected $ItemName is $StillAvailable"
         }
         else {
@@ -846,6 +986,12 @@ function ActionCancelled {
     }
     elseif ($Action -eq "FACTORY RESET") {
         $Text = "All the Profiles and their respective Categories, Shortcuts and Backups are $StillAvailable"
+    }
+    elseif ($Action -eq "REMOVE FILTER") {
+        $Text = "The selected Filter remains active"
+    }
+    elseif ($Action -eq "CLEAR FILTERS") {
+        $Text = "The applied Filters remains active"
     }
 
     # Cancelled Action Output
@@ -1008,10 +1154,10 @@ function ListShortcuts {
 # Function - Shows in the Standard Output the list of Shortcuts with the respective Index of each Category (You can indicate if you want the Index to start from the Reserved Slots or not)
 function ListShortcutsWithIndex {
     param (
-        $IndexPlusReservedSlots
+        $ListingInMainMenu
     )
 
-    if ($IndexPlusReservedSlots) {
+    if ($ListingInMainMenu) {
         $Index = $ReservedSlots
     }
     else {
@@ -1019,10 +1165,42 @@ function ListShortcutsWithIndex {
         Write-Host "`nShortcuts List:`n" -ForegroundColor $DefaultColor
     }
 
-    foreach ($Shortcut in $Database.Shortcuts) {
-        $CategoryIndex = GetCategoryIndex($Shortcut.CategoryID)
-        Write-Host "  $Index.-`t$($Database.Categories[$CategoryIndex].Name): $($Shortcut.Name)" -ForegroundColor $Database.Categories[$CategoryIndex].Color
-        $Index++
+    if ((CheckForAppliedFilters) -and ($ListingInMainMenu)) {
+        $NoShortcutsInMainMenu = $True
+        foreach ($Shortcut in $Database.Shortcuts) {
+            if ($Shortcut.CategoryID -in $Database.Filters) {
+                $NoShortcutsInMainMenu = $False
+                $CategoryIndex = GetCategoryIndex($Shortcut.CategoryID)
+                $CategoryColor = $Database.Categories[$CategoryIndex].Color
+                if ($ListingInMainMenu) {
+                    $IndexColor = $CategoryColor
+                }
+                else {
+                    $IndexColor = $DefaultColor
+                }
+                Write-Host "  $Index.-`t" -ForegroundColor $IndexColor -NoNewLine
+                Write-Host "$($Database.Categories[$CategoryIndex].Name): $($Shortcut.Name)" -ForegroundColor $CategoryColor
+            }
+            $Index++
+        }
+        if ($NoShortcutsInMainMenu) {
+            Write-Host "  No Shortcuts in the Filtered Categories" -ForegroundColor $EmptyColor
+        }
+    }
+    else {
+        foreach ($Shortcut in $Database.Shortcuts) {
+            $CategoryIndex = GetCategoryIndex($Shortcut.CategoryID)
+            $CategoryColor = $Database.Categories[$CategoryIndex].Color
+            if ($ListingInMainMenu) {
+                $IndexColor = $CategoryColor
+            }
+            else {
+                $IndexColor = $DefaultColor
+            }
+            Write-Host "  $Index.-`t" -ForegroundColor $IndexColor -NoNewLine
+            Write-Host "$($Database.Categories[$CategoryIndex].Name): $($Shortcut.Name)" -ForegroundColor $CategoryColor
+            $Index++
+        }
     }
 }
 
@@ -1072,7 +1250,7 @@ function ListBackups {
 # Function - Shows in the Standard Output the list of Backups with the respective Index of each Backup
 function ListBackupsWithIndex {
     $BackupsList = Get-ChildItem -Name -Path $CurrentProfileBackupsPath | Where-Object { $_ -match $BackupFileNameRegExPattern }
-    Write-Host "`nBackups List:" -ForegroundColor $DefaultColor
+    Write-Host "`nBackups List:`n" -ForegroundColor $DefaultColor
     $Index = 1
     foreach ($Backup in $BackupsList) {
         Write-Host "  $Index.-`t$($Backup.Substring(0, 26))" -ForegroundColor $DefaultColor
@@ -1126,6 +1304,58 @@ function ListProfilesWithIndex {
     }
 }
 
+# Function - Shows in the Standard Output the list of Applied Filters
+function ListAppliedFilters {
+    param (
+        $PrintHeader
+    )
+
+    $AnyFilterApplied = CheckForAppliedFilters($False)
+
+    if ($PrintHeader) {
+        # Powershell Window Title - Update
+        UpdateWindowTitle("Filters List")
+
+        # Header
+        ProfileHeader
+        Write-Host "                    FILTERS`n" -ForegroundColor $DefaultColor
+    }
+    elseif ($AnyFilterApplied) {
+        Write-Host "  Active Filters:" -ForegroundColor $DefaultColor
+    }
+
+    if ($AnyFilterApplied) {
+        foreach ($Filter in $Database.Filters) {
+            $FilterCategoryIndex = GetCategoryIndex($Filter)
+            Write-Host " "$Database.Categories[$FilterCategoryIndex].Name -ForegroundColor $Database.Categories[$FilterCategoryIndex].Color
+        }
+        Write-Host ""
+    }
+    elseif ($PrintHeader) {
+        NoFiltersApplied($False)
+    }
+
+    if ($PrintHeader) {
+        if (CheckForAppliedFilters) {
+            ShowItemStats("FILTER")
+        }
+        Write-Host "`n$MenuBorder`n" -ForegroundColor $DefaultColor
+        PressAnyKeyToContinue
+    }
+}
+
+# Function - Shows in the Standard Output the list of Applied Filters with the respective Index of each Applied Filter
+function ListAppliedFiltersWithIndex {
+    Write-Host "`nApplied Filters List:`n" -ForegroundColor $DefaultColor
+    $Index = 1
+    foreach ($Filter in $Database.Filters) {
+        $FilterCategoryIndex = GetCategoryIndex($Filter)
+        Write-Host "  $Index.-`t" -ForegroundColor $DefaultColor -NoNewLine
+        Write-Host $Database.Categories[$FilterCategoryIndex].Name -ForegroundColor $Database.Categories[$FilterCategoryIndex].Color
+        $Index++
+    }
+}
+
 # Function - Shows in the Standard Output a Header with the Current Active Profile Name
 function ProfileHeader {
     Write-Host $MenuBorder -ForegroundColor $DefaultColor
@@ -1153,7 +1383,6 @@ function CreateCategory {
     # Checking if the categories limit has been exceeded or not
     if (NoColorsAvailable) {
         NoSlotsAvailable("Category")
-        PressAnyKeyToContinue
         return
     }
 
@@ -1219,10 +1448,11 @@ function CreateCategory {
     $CategoryID = $Database.CategoryID_Index + 1
 
     # Creating the new 'Category Object'
-    $NewCategory = @{}
-    $NewCategory.Add("ID", $CategoryID)
-    $NewCategory.Add("Name", $CategoryName)
-    $NewCategory.Add("Color", $CategoryColor)
+    $NewCategory = [ORDERED] @{
+        "ID"    = $CategoryID
+        "Name"  = $CategoryName
+        "Color" = $CategoryColor
+    }
 
     # Adding the 'Category Object' to the Current Profile Database
     $Database.Categories += $NewCategory
@@ -1233,9 +1463,7 @@ function CreateCategory {
     # Remove the selected Color of the available Colors List
     RemoveColorFromColorsList($CategoryColor)
 
-    # Commit Changes to the Current Profile Database
-    $Database | ConvertTo-Json | Out-File $CurrentProfileDatabasePath
-    $Database = Get-Content -Path $CurrentProfileDatabasePath | ConvertFrom-Json
+    Invoke-Command -ScriptBlock $CommitChangesToCurrentProfileDatabase
 
     CategoryFormActionExecuted($CategoryName, $CategoryColor, "CREATED")
 }
@@ -1247,7 +1475,6 @@ function ModifyCategory {
 
     # Checking if Categories exists
     if (!(CheckForCategories($True))) {
-        PressAnyKeyToContinue
         return
     }
 
@@ -1406,9 +1633,7 @@ function ModifyCategory {
         AddColorToColorsList($OriginalCategoryColor)
     }
 
-    # Commit Changes to the Current Profile Database
-    $Database | ConvertTo-Json | Out-File $CurrentProfileDatabasePath
-    $Database = Get-Content -Path $CurrentProfileDatabasePath | ConvertFrom-Json
+    Invoke-Command -ScriptBlock $CommitChangesToCurrentProfileDatabase
 
     CategoryFormActionExecuted($NewCategoryName, $NewCategoryColor, "MODIFIED")
 }
@@ -1420,7 +1645,6 @@ function DeleteCategory {
 
     # Checking if categories exist
     if (!(CheckForCategories($True))) {
-        PressAnyKeyToContinue
         return
     }
 
@@ -1506,6 +1730,11 @@ function DeleteCategory {
                 $Database.Categories = $Database.Categories | Where-Object { $_.ID -ne $CategoryID }
             }
 
+            if ($CategoryID -in $Database.Filters) {
+                # Removing the Deleted Category from the Applied Filters List
+                RemoveFilterFromAppliedFiltersList($(GetFilterIndex($CategoryID)))
+            }
+
             # Adding the Color of the Deleted Category to the Colors List
             AddColorToColorsList($CategoryColor)
 
@@ -1520,9 +1749,7 @@ function DeleteCategory {
         }
     }
 
-    # Commit Changes to the Current Profile Database
-    $Database | ConvertTo-Json | Out-File $CurrentProfileDatabasePath
-    $Database = Get-Content -Path $CurrentProfileDatabasePath | ConvertFrom-Json
+    Invoke-Command -ScriptBlock $CommitChangesToCurrentProfileDatabase
 
     CategoryFormActionExecuted($CategoryName, $CategoryColor, "DELETED")
 }
@@ -1534,12 +1761,10 @@ function CreateShortcut {
 
     # Checking if categories exists & Checking if the shortcuts limit has been exceeded or not
     if (!(CheckForCategories($True))) {
-        PressAnyKeyToContinue
         return
     }
     elseif ($Database.Shortcuts.Length -ge $ShortcutsLimit) {
         NoSlotsAvailable("Shortcut")
-        PressAnyKeyToContinue
         return
     }
 
@@ -1582,10 +1807,7 @@ function CreateShortcut {
             ProvidedValueIsEmpty($True, $False)
         }
         else {
-            $ShortcutType = CheckPathType($ShortcutPath)
-
-            Write-Host "`nDetected Type: " -ForegroundColor $DefaultColor -NoNewLine
-            Write-Host $ShortcutType -ForegroundColor $DataColor
+            ShowDetectedType($False, $(CheckPathType($ShortcutPath)))
 
             # Path Validation
             if (PathValidation($ShortcutPath)) {
@@ -1635,11 +1857,12 @@ function CreateShortcut {
     $ShortcutID = $Database.ShortcutID_Index + 1
 
     # Creating the new 'Shortcut Object'
-    $NewShortcut = @{}
-    $NewShortcut.Add("ID", $ShortcutID)
-    $NewShortcut.Add("Name", $ShortcutName)
-    $NewShortcut.Add("Path", $ShortcutPath)
-    $NewShortcut.Add("CategoryID", $ShortcutCategoryID)
+    $NewShortcut = [ORDERED] @{
+        "ID"         = $ShortcutID
+        "Name"       = $ShortcutName
+        "Path"       = $ShortcutPath
+        "CategoryID" = $ShortcutCategoryID
+    }
 
     # Updating Shortcut ID Index value in the Current Profile Database
     $Database.ShortcutID_Index = $ShortcutID
@@ -1652,9 +1875,7 @@ function CreateShortcut {
         $Database.Shortcuts = SortShortcuts($Database.Shortcuts)
     }
 
-    # Commit Changes to the Current Profile Database
-    $Database | ConvertTo-Json | Out-File $CurrentProfileDatabasePath
-    $Database = Get-Content -Path $CurrentProfileDatabasePath | ConvertFrom-Json
+    Invoke-Command -ScriptBlock $CommitChangesToCurrentProfileDatabase
 
     $CategoryIndex = GetCategoryIndex($ShortcutCategoryID)
 
@@ -1668,7 +1889,6 @@ function ModifyShortcut {
 
     # Checking if shortcuts exist
     if (!(CheckForShortcuts($True))) {
-        PressAnyKeyToContinue
         return
     }
 
@@ -1784,10 +2004,7 @@ function ModifyShortcut {
                 break
             }
             else {
-                $NewShortcutType = CheckPathType($NewShortcutPath)
-
-                Write-Host "`nDetected Type: " -ForegroundColor $DefaultColor -NoNewLine
-                Write-Host $NewShortcutType -ForegroundColor $DataColor
+                ShowDetectedType($False, $(CheckPathType($NewShortcutPath)))
 
                 # Path Validation
                 if (PathValidation($NewShortcutPath)) {
@@ -1866,9 +2083,7 @@ function ModifyShortcut {
             $Database.Shortcuts = SortShortcuts($Database.Shortcuts)
         }
 
-        # Commit Changes to the Current Profile Database
-        $Database | ConvertTo-Json | Out-File $CurrentProfileDatabasePath
-        $Database = Get-Content -Path $CurrentProfileDatabasePath | ConvertFrom-Json
+        Invoke-Command -ScriptBlock $CommitChangesToCurrentProfileDatabase
 
         ShortcutFormActionExecuted($NewShortcutName, $Database.Categories[$NewCategoryIndex].Color, $Database.Categories[$NewCategoryIndex].Name, $NewShortcutPath, "MODIFIED")
     }
@@ -1881,7 +2096,6 @@ function DeleteShortcut {
 
     # Checking if shortcuts exists
     if (!(CheckForShortcuts($True))) {
-        PressAnyKeyToContinue
         return
     }
 
@@ -1965,9 +2179,7 @@ function DeleteShortcut {
         }
     }
 
-    # Commit Changes to the Current Profile Database
-    $Database | ConvertTo-Json | Out-File $CurrentProfileDatabasePath
-    $Database = Get-Content -Path $CurrentProfileDatabasePath | ConvertFrom-Json
+    Invoke-Command -ScriptBlock $CommitChangesToCurrentProfileDatabase
 
     ShortcutFormActionExecuted($ShortcutName, $CategoryColor, $CategoryName, $ShortcutPath, "DELETED")
 }
@@ -1980,7 +2192,6 @@ function CreateBackup {
         UpdateWindowTitle("Create Backup")
 
         NoSlotsAvailable("Backup")
-        PressAnyKeyToContinue
         return
     }
 
@@ -2316,9 +2527,7 @@ function ChangeProfile {
                     else {
                         $ProfilesDatabase.LastUsedProfile_ID = $ProfilesDatabase.Profiles[$ProfileIndex].ID
 
-                        # Commit Changes to the Profiles Database
-                        $ProfilesDatabase | ConvertTo-Json | Out-File $ProfilesDatabasePath
-                        $ProfilesDatabase = Get-Content -Path $ProfilesDatabasePath | ConvertFrom-Json
+                        Invoke-Command -ScriptBlock $CommitChangesToProfilesDatabase
 
                         Write-Host "`nSelected Profile: " -ForegroundColor $DefaultColor -NoNewLine
                         Write-Host $ProfilesDatabase.Profiles[$ProfileIndex].Name -ForegroundColor $SuccessColor
@@ -2363,7 +2572,6 @@ function CreateProfile {
     # Checking if the profiles limit has been exceeded or not
     if ($ProfilesDatabase.Profiles.Length -ge $ProfilesLimit) {
         NoSlotsAvailable("Profile")
-        PressAnyKeyToContinue
         return
     }
 
@@ -2396,10 +2604,11 @@ function CreateProfile {
                 New-Item -Path $ProfilePath -ItemType "Directory" > $Null
 
                 # Creating the New 'Profile Object'
-                $NewProfile = @{}
-                $NewProfile.add("ID", $ProfileID)
-                $NewProfile.add("Name", $ProfileName)
-                $NewProfile.add("Path", $ProfilePath)
+                $NewProfile = [ORDERED] @{
+                    "ID"   = $ProfileID
+                    "Name" = $ProfileName
+                    "Path" = $ProfilePath
+                }
 
                 # Updating Profile ID Index value in the Profiles Database
                 $ProfilesDatabase.ProfileID_Index = $ProfileID
@@ -2407,9 +2616,7 @@ function CreateProfile {
                 # Adding the 'Profile Object' to the Profiles Database
                 $ProfilesDatabase.Profiles += $NewProfile
 
-                # Commit Changes to the Profiles Database
-                $ProfilesDatabase | ConvertTo-Json | Out-File $ProfilesDatabasePath
-                $ProfilesDatabase = Get-Content -Path $ProfilesDatabasePath | ConvertFrom-Json
+                Invoke-Command -ScriptBlock $CommitChangesToProfilesDatabase
 
                 ProfileFormActionExecuted($ProfileName, "CREATED")
                 PressAnyKeyToContinue
@@ -2499,9 +2706,7 @@ function ModifyProfile {
                 $ProfilesDatabase.Profiles[$ProfileIndex].Name = $NewProfileName
                 $ProfilesDatabase.Profiles[$ProfileIndex].Path = "$ProfilesPath\$NewProfileName"
 
-                # Commit Changes to the Profiles Database
-                $ProfilesDatabase | ConvertTo-Json | Out-File $ProfilesDatabasePath
-                $ProfilesDatabase = Get-Content -Path $ProfilesDatabasePath | ConvertFrom-Json
+                Invoke-Command -ScriptBlock $CommitChangesToProfilesDatabase
 
                 ProfileFormActionExecuted($OriginalProfileName, "MODIFIED")
 
@@ -2587,9 +2792,7 @@ function DeleteProfile {
                                     $ProfilesDatabase.Profiles = $ProfilesDatabase.Profiles | Where-Object { $_.ID -ne $ProfileID }
                                 }
 
-                                # Commit Changes to the Profiles Database
-                                $ProfilesDatabase | ConvertTo-Json | Out-File $ProfilesDatabasePath
-                                $ProfilesDatabase = Get-Content -Path $ProfilesDatabasePath | ConvertFrom-Json
+                                Invoke-Command -ScriptBlock $CommitChangesToProfilesDatabase
 
                                 ProfileFormActionExecuted($PorfileName, "DELETED")
                                 PressAnyKeyToContinue
@@ -2615,6 +2818,211 @@ function DeleteProfile {
             }
         }
     }
+}
+
+# Function - Adds a Filter to the Applied Filters List
+function ApplyCategoryFilter {
+    # Powershell Window Title - Update
+    UpdateWindowTitle("Apply Filter")
+
+    # Cheking for Categories
+    if (!(CheckForCategories($True))) {
+        return
+    }
+
+    if ($Database.Filters.Length -eq $Database.Categories.Length) {
+        Write-Host "`nERROR: All categories are in the Applied Filters List`n" -ForegroundColor $ErrorColor
+        PressAnyKeyToContinue
+        return
+    }
+
+    FormHeader("Apply Category Filter")
+
+    $AvailableCategories = @()
+    foreach ($Category in $Database.Categories) {
+        if ($Category.ID -notin $Database.Filters) {
+            $AvailableCategories += $Category
+        }
+    }
+
+    # Loop for recolect the Category Index
+    while ($True) {
+        Write-Host "`nAvailable Categories List:`n" -ForegroundColor $DefaultColor
+
+        $Index = 1
+        foreach ($Category in $AvailableCategories) {
+            Write-Host "  $Index.-`t" -ForegroundColor $DefaultColor -NoNewLine
+            Write-Host $Category.Name -ForegroundColor $Category.Color
+            $Index++
+        }
+
+        # Read User Input - Category Index
+        $CategoryIndex = $(Write-Host "`nSelect the Category you want to add as Filter: " -ForegroundColor $InputColor -NoNewLine; Read-Host)
+
+        # Cheking if the User Input is a Cancel instruction
+        if ($CategoryIndex -eq "exit") {
+            return
+        }
+
+        # Cheking if the User Input is empty
+        if (IsEmpty($CategoryIndex)) {
+            ProvidedValueIsEmpty($True, $False)
+        }
+        else {
+            # Cheking if the User Input is an Integer (Correct Format)
+            if (IsInteger($CategoryIndex)) {
+                $CategoryIndex = [int]$CategoryIndex - 1
+
+                # Cheking if the selected Category Index is inside of the range of available Categories
+                if (($CategoryIndex -ge 0) -and ($CategoryIndex -lt $AvailableCategories.Length)) {
+                    break
+                }
+                else {
+                    ItemNotInList("Category", "Available Categories")
+                }
+            }
+            else {
+                DataFormatNotCorrect("Category", "APPLY AS FILTER", $False, $True, $False)
+            }
+        }
+    }
+
+    AddFilterToAppliedFiltersList($AvailableCategories[$CategoryIndex].ID)
+
+    Invoke-Command -ScriptBlock $CommitChangesToCurrentProfileDatabase
+
+    Write-Host "`nThe Category " -ForegroundColor $DefaultColor -NoNewLine
+    Write-Host $AvailableCategories[$CategoryIndex].Name -ForegroundColor $AvailableCategories[$CategoryIndex].Color -NoNewLine
+    Write-Host " has been" -ForegroundColor $DefaultColor -NoNewLine
+    Write-Host " APPLIED AS FILTER" -ForegroundColor $SuccessColor -NoNewLine
+    Write-Host " successfully`n" -ForegroundColor $DefaultColor
+    PressAnyKeyToContinue
+}
+
+# Function - Removes a Filter from the Applied Filters List
+function RemoveCategoryFilter {
+    # Powershell Window Title - Update
+    UpdateWindowTitle("Remove Filter")
+
+    # Cheking for applied Filters
+    if (!(CheckForAppliedFilters($True))) {
+        return
+    }
+
+    FormHeader("Remove Category Filter")
+
+    # Loop for recolect the Filter Index
+    while ($True) {
+        # Show Applied Filters List
+        ListAppliedFiltersWithIndex
+
+        # Read User Input - Filter Index
+        $FilterIndex = $(Write-Host "`nSelect the applied Filter you want to Remove: " -ForegroundColor $InputColor -NoNewLine; Read-Host)
+
+        # Cheking if the User Input is a Cancel instruction
+        if ($FilterIndex -eq "exit") {
+            return
+        }
+
+        # Cheking if the User Input is empty
+        if (IsEmpty($FilterIndex)) {
+            ProvidedValueIsEmpty($True, $False)
+        }
+        else {
+            # Cheking if the User Input is an Integer (Correct Format)
+            if (IsInteger($FilterIndex)) {
+                $FilterIndex = [int]$FilterIndex - 1
+
+                # Cheking if the selected Filter Index is inside of the range of available Filters
+                if (($FilterIndex -ge 0) -and ($FilterIndex -lt $Database.Filters.Length)) {
+                    break
+                }
+                else {
+                    ItemNotInList("Filter", "Applied Filters")
+                }
+            }
+            else {
+                DataFormatNotCorrect("Filter", "REMOVE", $False, $True, $False)
+            }
+        }
+    }
+
+    # Loop for recolect the Remove Confirmation
+    while ($True) {
+        # Read User Input - Remove Confirmation
+        $RemoveConfirmation = $(ActionConfirmation("REMOVE", "Filter", ""); Read-Host)
+
+        # Cheking User Selected Option
+        if ($RemoveConfirmation -eq "y") {
+            $CategoryName = $Database.Categories[$(GetCategoryIndex($Database.Filters[$FilterIndex]))].Name
+            $CategoryColor = $Database.Categories[$(GetCategoryIndex($Database.Filters[$FilterIndex]))].Color
+
+            RemoveFilterFromAppliedFiltersList($FilterIndex)
+            break
+        }
+        elseif ($RemoveConfirmation -eq "n") {
+            ActionCancelled("REMOVE FILTER", "", "")
+            return
+        }
+        else {
+            Write-Host $NotMatchYN -ForegroundColor $ErrorColor
+        }
+    }
+
+    Invoke-Command -ScriptBlock $CommitChangesToCurrentProfileDatabase
+
+    # Confirmation Output
+    Write-Host "`nThe Filter " -ForegroundColor $DefaultColor -NoNewLine
+    Write-Host $CategoryName -ForegroundColor $CategoryColor -NoNewLine
+    Write-Host " has been" -ForegroundColor $DefaultColor -NoNewLine
+    Write-Host " REMOVED" -ForegroundColor $SuccessColor -NoNewLine
+    Write-Host " successfully`n" -ForegroundColor $DefaultColor
+    PressAnyKeyToContinue
+}
+
+# Function - Clears the Applied Filters List (Reset Filters)
+function ClearFilters {
+    # Powershell Window Title - Update
+    UpdateWindowTitle("Clear Filters")
+
+    # Cheking for applied Filters
+    if (!(CheckForAppliedFilters($True))) {
+        return
+    }
+
+    # Loop for recolect the Clear Filter Confirmation
+    while ($True) {
+        # Read User Input - Clear Filter Confirmation
+        $ClearFilterConfirmation = $(Write-Host "`nDo you want to CLEAR all the applied Filters? [Y/N]: " -ForegroundColor $ProcessColor -NoNewLine; Read-Host)
+
+        # Cheking User Selected Option
+        if ($ClearFilterConfirmation -eq "y") {
+            # Clear Filters
+            ClearFiltersList
+
+            # Confirmation Output
+            Write-Host "`nAll the" -ForegroundColor $DefaultColor -NoNewLine
+            Write-Host " APPLIED FILTERS" -ForegroundColor $SuccessColor -NoNewLine
+            Write-Host " have been" -ForegroundColor $DefaultColor -NoNewLine
+            Write-Host " CLEANED" -ForegroundColor $SuccessColor -NoNewLine
+            Write-Host " successfully`n" -ForegroundColor $DefaultColor
+            PressAnyKeyToContinue
+            break
+        }
+        elseif ($ClearFilterConfirmation -eq "n") {
+            ActionCancelled("CLEAR FILTERS", "", "")
+            break
+        }
+        else {
+            Write-Host $NotMatchYN -ForegroundColor $ErrorColor
+        }
+    }
+}
+
+# Function - Resets the Applied Filters List
+function ClearFiltersList {
+    $Database.Filters = @()
+    Invoke-Command -ScriptBlock $CommitChangesToCurrentProfileDatabase
 }
 
 # Function - Restart Program (Closes the actual process and Opens a new one in the same Origin [CMD, PowerShell or Windows Terminal] )
@@ -2676,6 +3084,50 @@ function Startup {
     Write-Host "$StartupBorder" -ForegroundColor $DefaultColor
 }
 
+# Function - Launches a Shortcut (Passing the position of the Shortcut in the Main Menu as parameter)
+function LaunchShortcut {
+    param (
+        $Option
+    )
+
+    # Powershell Window Title - Update
+    UpdateWindowTitle("Launching...")
+
+    # Getting the selected Shortcut and Category requiered data
+    $ShortcutPath = $Database.Shortcuts[$Option - $ReservedSlots].Path
+    $ShortcutType = CheckPathType($ShortcutPath)
+    $CategoryName = $Database.Categories[$(GetCategoryIndex($Database.Shortcuts[$Option - $ReservedSlots].CategoryID))].Name
+
+    Start-Sleep -Milliseconds 20
+
+    ShowDetectedType($True, $ShortcutType)
+
+    Start-Sleep -Milliseconds 20
+
+    # Cheking Path Integrity
+    if (PathValidation($ShortcutPath)) {
+        Start-Sleep -Milliseconds 20
+
+        Write-Host "`nLaunching $($CategoryName): $($Database.Shortcuts[$Option - $ReservedSlots].Name)" -ForegroundColor $ProcessColor
+
+        # Checking the Type of Path and Launching the Shortcut according to its Type
+        if ($ShortcutType -eq "RDP") {
+            Start-Process "$ENV:WinDir\System32\mstsc.exe" -ArgumentList "/V:$($ShortcutPath.Substring(4, $ShortcutPath.Length - 4))"
+        }
+        elseif ($ShortcutType -eq "MAIL") {
+            Start-Process "mailto:$($ShortcutPath.Substring(5, $ShortcutPath.Length - 5))"
+        }
+        else {
+            Start-Process "$ShortcutPath"
+        }
+
+        Write-Host "Shortcut launched successfully`n" -ForegroundColor $SuccessColor
+    }
+    else {
+        Write-Host ""
+    }
+}
+
 # Function - Shows in the Standard Output the 'Main Menu' with all the user created Shrotcuts (The Launch of the Shortcuts is done in this function)
 function MainMenu {
     # loop Execution
@@ -2686,12 +3138,23 @@ function MainMenu {
         # Main Menu Output
         ProfileHeader
         Write-Host "                     MENU`n" -ForegroundColor $DefaultColor
-        Write-Host "  System options:" -ForegroundColor $DefaultColor
+        Write-Host "  System Options:" -ForegroundColor $DefaultColor
         Write-Host "  0.-`tClose $Name" -ForegroundColor $DefaultColor
-        Write-Host "  1.-`tOpen Profiles Menu" -ForegroundColor $DefaultColor
-        Write-Host "  2.-`tOpen Settings Menu" -ForegroundColor $DefaultColor
-        Write-Host "  3.-`tClear Screen`n" -ForegroundColor $DefaultColor
-        Write-Host "  Shortcuts:" -ForegroundColor $DefaultColor
+        Write-Host "  S.-`tOpen Settings Menu" -ForegroundColor $DefaultColor
+        Write-Host "  P.-`tOpen Profiles Menu" -ForegroundColor $DefaultColor
+        Write-Host "  F.-`tOpen Filters Menu" -ForegroundColor $DefaultColor
+        Write-Host "  C.-`tClear Screen`n" -ForegroundColor $DefaultColor
+
+        ListAppliedFilters($False)
+
+        $AnyFilterApplied = CheckForAppliedFilters
+
+        if (!($AnyFilterApplied)) {
+            Write-Host "  Shortcuts:" -ForegroundColor $DefaultColor
+        }
+        else {
+            Write-Host "  Filtered Shortcuts:" -ForegroundColor $DefaultColor
+        }
 
         # Cheking if Shortcuts have been created or not
         if (!(CheckForShortcuts($False))) {
@@ -2711,43 +3174,19 @@ function MainMenu {
 
         # Selected Shortcut Launch Process
         if ($Selected) {
-            # Powershell Window Title - Update
-            UpdateWindowTitle("Launching...")
-
-            # Getting the selected Shortcut and Category requiered data
-            $ShortcutPath = $Database.Shortcuts[$Option - $ReservedSlots].Path
-            $ShortcutType = CheckPathType($ShortcutPath)
-            $CategoryName = $Database.Categories[$(GetCategoryIndex($Database.Shortcuts[$Option - $ReservedSlots].CategoryID))].Name
-
-            Start-Sleep -Milliseconds 20
-
-            Write-Host "Cheking the selected Shortcut Type..." -ForegroundColor $ProcessColor
-            Write-Host "Detected type: " -ForegroundColor $DefaultColor -NoNewLine
-            Write-Host $ShortcutType -ForegroundColor $DataColor
-
-            Start-Sleep -Milliseconds 20
-
-            # Cheking Path Integrity
-            if (PathValidation($ShortcutPath)) {
-                Start-Sleep -Milliseconds 20
-
-                Write-Host "`nLaunching $($CategoryName): $($Database.Shortcuts[$Option - $ReservedSlots].Name)" -ForegroundColor $ProcessColor
-
-                # Checking the Type of Path and Launching the Shortcut according to its Type
-                if ($ShortcutType -eq "RDP") {
-                    Start-Process "$ENV:WinDir\System32\mstsc.exe" -ArgumentList "/V:$($ShortcutPath.Substring(4, $ShortcutPath.Length - 4))"
-                }
-                elseif ($ShortcutType -eq "MAIL") {
-                    Start-Process "mailto:$($ShortcutPath.Substring(5, $ShortcutPath.Length - 5))"
-                }
-                else {
-                    Start-Process "$ShortcutPath"
-                }
-
-                Write-Host "Shortcut launched successfully`n" -ForegroundColor $SuccessColor
+            if (!($AnyFilterApplied)) {
+                # Launching Shortcut
+                LaunchShortcut($Option)
             }
             else {
-                Write-Host ""
+                if ($Database.Shortcuts[$Option - $ReservedSlots].CategoryID -in $Database.Filters) {
+                    # Launching Shortcut
+                    LaunchShortcut($Option)
+                }
+                else {
+                    ItemNotInMenu($Option, "Main")
+                    $InvalidOption = $False
+                }
             }
 
             # Powershell Window Title - Update
@@ -2765,13 +3204,16 @@ function MainMenu {
             ShowProgressBar(25, 20, $DefaultColor, "`n Closing $Name $Version`n", $DefaultColor)
             break
         }
-        elseif ($Option -eq "1") {
-            ProfilesMenu
-        }
-        elseif ($Option -eq "2") {
+        elseif ($Option -eq "S") {
             SettingsMenu
         }
-        elseif ($Option -eq "3") {
+        elseif ($Option -eq "P") {
+            ProfilesMenu
+        }
+        elseif ($Option -eq "F") {
+            FiltersMenu
+        }
+        elseif ($Option -eq "C") {
             Clear-Host
         }
         elseif (IsEmpty($Option)) {
@@ -2804,7 +3246,7 @@ function SettingsMenu {
         # Settings Menu Output
         ProfileHeader
         Write-Host "                   SETTINGS`n" -ForegroundColor $DefaultColor
-        SettingOption("0", $DefaultColor, "Close Settings")
+        SettingOption("0", $DefaultColor, "Close Settings Menu")
         SettingOption("1", $SuccessColor, "List Categories")
         SettingOption("2", $SuccessColor, "Create Category")
         SettingOption("3", $SuccessColor, "Modify Category")
@@ -2914,7 +3356,7 @@ function ProfilesMenu {
         # Profile Settings Menu Output
         ProfileHeader
         Write-Host "                   PROFILES`n" -ForegroundColor $DefaultColor
-        Write-Host "  0.-`tClose Settings" -ForegroundColor $DefaultColor
+        Write-Host "  0.-`tClose Profiles Menu" -ForegroundColor $DefaultColor
         Write-Host "  1.-`tList Profiles" -ForegroundColor $DefaultColor
         Write-Host "  2.-`tChange Profile" -ForegroundColor $DefaultColor
         Write-Host "  3.-`tCreate Profile" -ForegroundColor $DefaultColor
@@ -2958,6 +3400,58 @@ function ProfilesMenu {
     }
 }
 
+# Function - Shows in the Standard Output the 'Filters Menu' (Includes all function calls for each Filter Option)
+function FiltersMenu {
+    # loop Execution
+    while ($True) {
+        Clear-Host
+
+        # Powershell Window Title - Update
+        UpdateWindowTitle("Filters Menu")
+
+        # Profile Settings Menu Output
+        ProfileHeader
+        Write-Host "                    FILTERS`n" -ForegroundColor $DefaultColor
+        Write-Host "  0.-`tClose Filters Menu" -ForegroundColor $DefaultColor
+        Write-Host "  1.-`tList Applied Filters" -ForegroundColor $DefaultColor
+        Write-Host "  2.-`tApply Category Filter" -ForegroundColor $DefaultColor
+        Write-Host "  3.-`tRemove Category Filter" -ForegroundColor $DefaultColor
+        Write-Host "  4.-`tClear Filters" -ForegroundColor $DefaultColor
+        Write-Host "`n$MenuBorder`n" -ForegroundColor $DefaultColor
+
+        if ($InvalidOption) {
+            ItemNotInMenu($Option, "Filters")
+            $InvalidOption = $False
+        }
+
+        # Read User Input
+        $Option = $(Write-Host $SelectMenuItem -ForegroundColor $InputColor -NoNewLine; Read-Host)
+
+        Clear-Host
+
+        # Checking the option selected by the user and calling the corresponding function based on the selected option
+        if ($Option -eq "0") {
+            break
+        }
+        elseif ($Option -eq "1") {
+            ListAppliedFilters($True)
+        }
+        elseif ($Option -eq "2") {
+            ApplyCategoryFilter
+        }
+        elseif ($Option -eq "3") {
+            RemoveCategoryFilter
+        }
+        elseif ($Option -eq "4") {
+            ClearFilters
+        }
+        else {
+            $InvalidOption = $True
+        }
+        Clear-Host
+    }
+}
+
 # Showing the Startup Output + Loading Progress Bar
 Startup
 UpdateWindowTitle("Loading...")
@@ -2978,11 +3472,11 @@ if (!(Test-Path -Path $ProfilesDatabasePath)) {
     }
 
     # Creating Profiles Database
-    $Profiles = New-Object System.Collections.ArrayList
-    $ProfilesDatabase = @{}
-    $ProfilesDatabase.add("Profiles", $Profiles)
-    $ProfilesDatabase.add("ProfileID_Index", 0)
-    $ProfilesDatabase.Add("LastUsedProfile_ID", 0)
+    $ProfilesDatabase = [ORDERED] @{
+        "Profiles"           = @()
+        "ProfileID_Index"    = 0
+        "LastUsedProfile_ID" = 0
+    }
 
     # Loop for recolect the Default Profile Name
     while ($True) {
@@ -3000,17 +3494,16 @@ if (!(Test-Path -Path $ProfilesDatabasePath)) {
     New-Item -Path "$ProfilesPath\$DefaultProfileName\Backups" -ItemType "Directory" > $Null
 
     # Creating the 'Default Profile' Object
-    $DefaultProfile = @{}
-    $DefaultProfile.add("ID", 0)
-    $DefaultProfile.add("Name", $DefaultProfileName)
-    $DefaultProfile.add("Path", "$ProfilesPath\$DefaultProfileName")
+    $DefaultProfile = [ORDERED] @{
+        "ID"   = 0
+        "Name" = $DefaultProfileName
+        "Path" = "$ProfilesPath\$DefaultProfileName"
+    }
 
     # Saving the Default Profile in the Profiles Database
     $ProfilesDatabase.Profiles += $DefaultProfile
 
-    # Commit Changes to the Profiles Database
-    $ProfilesDatabase | ConvertTo-Json | Out-File $ProfilesDatabasePath
-    $ProfilesDatabase = Get-Content -Path $ProfilesDatabasePath | ConvertFrom-Json
+    Invoke-Command -ScriptBlock $CommitChangesToProfilesDatabase
 
     # Loading Current Profile
     $CurrentProfileID = $ProfilesDatabase.LastUsedProfile_ID
@@ -3054,21 +3547,17 @@ $CurrentProfileDatabasePath = "$CurrentProfilePath\Database.json"
 if (!(Test-Path -Path $CurrentProfileDatabasePath)) {
     Write-Host "`nCreating Database..." -ForegroundColor $InputColor
 
-    # Categories & Shortcuts List
-    $Categories = New-Object System.Collections.ArrayList
-    $Shortcuts = New-Object System.Collections.ArrayList
-
     # Creating the Current Profile Database
-    $Database = @{}
-    $Database.Add("Categories", $Categories)
-    $Database.Add("Shortcuts", $Shortcuts)
-    $Database.Add("Colors", $Colors)
-    $Database.Add("CategoryID_Index", -1)
-    $Database.Add("ShortcutID_Index", -1)
+    $Database = [ORDERED] @{
+        "Categories"       = @()
+        "Shortcuts"        = @()
+        "Filters"          = @()
+        "Colors"           = $Colors
+        "CategoryID_Index" = -1
+        "ShortcutID_Index" = -1
+    }
 
-    # Commit Changes to the Current Profile Database
-    $Database | ConvertTo-Json | Out-File $CurrentProfileDatabasePath
-    $Database = Get-Content -Path $CurrentProfileDatabasePath | ConvertFrom-Json
+    Invoke-Command -ScriptBlock $CommitChangesToCurrentProfileDatabase
 
     Write-Host "Database created successfully`n" -ForegroundColor $SuccessColor
 }
