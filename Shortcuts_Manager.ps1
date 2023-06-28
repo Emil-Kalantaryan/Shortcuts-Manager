@@ -1,8 +1,8 @@
 # Constant Variables - Program Information
 New-Variable -Name Author -Option Constant -Value "Emil Kalantaryan"
 New-Variable -Name Name -Option Constant -Value "Shortcuts Manager"
-New-Variable -Name Version -Option Constant -Value "1.2.0"
-New-Variable -Name Date -Option Constant -Value "12/06/2022"
+New-Variable -Name Version -Option Constant -Value "1.2.2"
+New-Variable -Name Date -Option Constant -Value "26/06/2023"
 
 # Constant Variable - Origin of the Execution (first Parameter of the Program)
 New-Variable -Name Origin -Option Constant -Value $Args[0]
@@ -21,6 +21,9 @@ New-Variable -Name HTTPSRegExPattern -Option Constant -Value "^https:\/\/.+$"
 
 # Constant Variable - Email Regular Expression Pattern
 New-Variable -Name EmailRegExPattern -Option Constant -Value "^mail:([a-zA-Z0-9.-]+)@([a-zA-Z0-9.-]+)\.([a-zA-Z]{2,})"
+
+# Constant Variable - Microsoft Teams URL Regular Expression Pattern
+New-Variable -Name TeamsRegExPattern -Option Constant -Value "^teams:https:\/\/teams\.microsoft\.com\/_#\/.+$"
 
 # Constant Variable - Profile Name Regular Expression Pattern
 New-Variable -Name ProfileNameRegExPattern -Option Constant -Value "^([a-zA-Z0-9]+ )*[a-zA-Z0-9]+$"
@@ -634,6 +637,9 @@ function CheckPathType {
         elseif ($Path.Substring(0, 6) -eq "https:") {
             return "HTTPS"
         }
+        elseif ($Path.Substring(0, 6) -eq "teams:") {
+            return "TEAMS"
+        }
         else {
             return "PATH"
         }
@@ -677,11 +683,15 @@ function PathValidation {
             $HTTP = $True
         }
 
-        if ($Path -imatch $HTTPsRegExPattern) {
+        if ($Path -imatch $HTTPSRegExPattern) {
             $HTTPS = $True
         }
 
-        if ($RDP -or $MAIL -or $HTTP -or $HTTPS) {
+        if ($Path -imatch $TeamsRegExPattern) {
+            $TEAMS = $True
+        }
+
+        if ($RDP -or $MAIL -or $HTTP -or $HTTPS -or $TEAMS) {
             Write-Host "The Shortcut Path format is valid" -ForegroundColor $SuccessColor
             return $True
         }
@@ -1215,6 +1225,8 @@ function ListShortcutTypes {
     Write-Host " (rdp:`"Host Name or IP`")" -ForegroundColor $SuccessColor
     Write-Host "  MAIL: Email Addresses" -ForegroundColor $DefaultColor -NoNewLine
     Write-Host " (mail:`"Email Address`")" -ForegroundColor $SuccessColor
+    Write-Host "  TEAMS: Microsoft Teams Resources" -ForegroundColor $DefaultColor -NoNewLine
+    Write-Host " (teams:`"URL of the Resource`")" -ForegroundColor $SuccessColor
 }
 
 # Function - Shows in the Standard Output the list of Backups
@@ -3033,8 +3045,8 @@ function Restart {
     ShowProgressBar(25, 20, $DefaultColor, "`n Restarting $Name $Version`n", $DefaultColor)
 
     if ($Origin -eq "WT") {
-        if (Test-Path -Path ".\START Shortcuts Manager - Windows Terminal.bat") {
-            Start-Process ".\START Shortcuts Manager - Windows Terminal.bat"
+        if (Test-Path -Path ".\START Shortcuts Manager - Terminal.bat") {
+            Start-Process ".\START Shortcuts Manager - Terminal.bat"
         }
         else {
             $LauncherFilesNotFound = $True
@@ -3117,11 +3129,39 @@ function LaunchShortcut {
         elseif ($ShortcutType -eq "MAIL") {
             Start-Process "mailto:$($ShortcutPath.Substring(5, $ShortcutPath.Length - 5))"
         }
+        elseif ($ShortcutType -eq "TEAMS") {
+            if (Test-Path "$Env:LOCALAPPDATA\Microsoft\Teams\current\Teams.exe") {
+                $ShortcutPath = $ShortcutPath -Replace "teams:https://teams.microsoft.com/_#/", ""
+                $ShortcutPath = $ShortcutPath -Replace "school/", ""
+                $ShortcutPath = $ShortcutPath -Replace "&", "^&"
+
+                $IndexOfContext = $ShortcutPath.IndexOf("ctx=")
+
+                if ($IndexOfContext -gt -1) {
+                    try {
+                        $Context = $ShortcutPath.Substring($IndexOfContext, 11)
+                        if ($Context -eq "ctx=channel") {
+                            Start-Process "$ENV:WinDir\System32\cmd.exe" -ArgumentList "/C START msteams:conversations/48:notes?ctx=chat & EXIT" -WindowStyle Hidden
+                            Start-Sleep -Milliseconds 250
+                        }
+                    }
+                    catch {}
+                }
+
+                Start-Process "$ENV:WinDir\System32\cmd.exe" -ArgumentList "/C START msteams:$($ShortcutPath) & EXIT" -WindowStyle Hidden
+            }
+            else {
+                Write-Host "ERROR: Unable to launch the Shortcut. Make sure you have Microsoft Teams installed`n" -ForegroundColor $ErrorColor
+                $ErrorInLaunch = $True
+            }
+        }
         else {
             Start-Process "$ShortcutPath"
         }
 
-        Write-Host "Shortcut launched successfully`n" -ForegroundColor $SuccessColor
+        if (!($ErrorInLaunch)) {
+            Write-Host "Shortcut launched successfully`n" -ForegroundColor $SuccessColor
+        }
     }
     else {
         Write-Host ""
